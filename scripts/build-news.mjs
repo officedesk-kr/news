@@ -1,0 +1,66 @@
+// 서버(GitHub Actions)에서 실행: 언론사 RSS를 카테고리별로 받아 news.json 생성
+const FEEDS=[
+  {u:"https://www.yna.co.kr/rss/news.xml",s:"연합뉴스",cat:"종합"},
+  {u:"https://news.sbs.co.kr/news/newsflashRssFeed.do?plink=RSSREADER",s:"SBS",cat:"종합"},
+  {u:"http://www.khan.co.kr/rss/rssdata/total_news.xml",s:"경향신문",cat:"종합"},
+  {u:"https://rss.donga.com/total.xml",s:"동아일보",cat:"종합"},
+  {u:"https://www.yna.co.kr/rss/economy.xml",s:"연합뉴스",cat:"경제"},
+  {u:"https://www.hankyung.com/feed/all-news",s:"한국경제",cat:"경제"},
+  {u:"https://www.yna.co.kr/rss/industry.xml",s:"연합뉴스",cat:"IT산업"},
+  {u:"https://www.yna.co.kr/rss/sports.xml",s:"연합뉴스",cat:"스포츠"},
+  {u:"https://www.yna.co.kr/rss/entertainment.xml",s:"연합뉴스",cat:"연예"},
+  {u:"https://www.yna.co.kr/rss/international.xml",s:"연합뉴스",cat:"세계"},
+  {u:"https://www.hani.co.kr/rss/",s:"한겨레",cat:"종합"},
+  {u:"https://www.ytn.co.kr/_comm/rss_news.php?mcd=0102",s:"YTN",cat:"종합"},
+  {u:"https://www.mk.co.kr/rss/30000001/",s:"매일경제",cat:"경제"},
+  {u:"https://rss.etnews.com/Section901.xml",s:"전자신문",cat:"IT산업"},
+  {u:"https://rss.mt.co.kr/rss.xml",s:"머니투데이",cat:"경제"}
+];
+function tag(block,name){const m=block.match(new RegExp("<"+name+"[^>]*>([\\s\\S]*?)</"+name+">","i"));if(!m)return "";let v=m[1].trim();v=v.replace(/^<!\[CDATA\[/,"").replace(/\]\]>$/,"").trim();return v;}
+function strip(h){return h.replace(/<[^>]+>/g," ").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&amp;/g,"&").replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g," ").replace(/\s+/g," ").trim();}
+function clip(t,max){t=(t||"").trim();if(t.length<=max)return t;var s=t.slice(0,max);
+  var cand=[s.lastIndexOf("다. "),s.lastIndexOf("다."),s.lastIndexOf("요. "),s.lastIndexOf("요."),s.lastIndexOf(". "),s.lastIndexOf("! "),s.lastIndexOf("? "),s.lastIndexOf("."),s.lastIndexOf("”")];
+  var i=Math.max.apply(null,cand);
+  if(i>max*0.5)return s.slice(0,i+1);
+  return s.slice(0,max).trim()+"…";}
+async function fullText(url){
+  try{
+    const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),8000);
+    const r=await fetch(url,{signal:ctrl.signal,headers:{"User-Agent":"Mozilla/5.0 (newsbot)"}});clearTimeout(t);
+    const h=await r.text();
+    let txt="";
+    const m=h.match(/<meta property=["']og:description["'] content=["']([^"']*)["']/i);if(m)txt=strip(m[1]);
+    if(txt.length<40){const m2=h.match(/<meta name=["']description["'] content=["']([^"']*)["']/i);if(m2)txt=strip(m2[1]);}
+    txt=txt.replace(/무단\s*전재.*$/,"").replace(/Copyright.*$/i,"").replace(/저작권자.*$/,"").replace(/ⓒ.*$/i,"").trim();
+    return txt.slice(0,400);
+  }catch(e){return "";}
+}
+async function one(f){
+  try{
+    const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),12000);
+    const r=await fetch(f.u,{signal:ctrl.signal,headers:{"User-Agent":"Mozilla/5.0 (newsbot)"}});clearTimeout(t);
+    const xml=await r.text();
+    const items=xml.split(/<item[ >]/i).slice(1);
+    return items.map(b=>{
+      const title=strip(tag(b,"title"));
+      let link=tag(b,"link");if(!link){const m=b.match(/<link[^>]*>([\s\S]*?)<\/link>/i);link=m?m[1].trim():"";}
+      const pub=tag(b,"pubDate")||tag(b,"dc:date");
+      const desc=strip(tag(b,"description")).slice(0,600);
+      return {title,link,pubDate:pub,src:f.s,cat:f.cat,desc};
+    }).filter(x=>x.title&&x.link);
+  }catch(e){console.error("fail",f.u,e.message);return [];}
+}
+const GN={"종합":"https://news.google.com/rss?hl=ko&gl=KR&ceid=KR:ko","경제":"https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=ko&gl=KR&ceid=KR:ko","IT산업":"https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=ko&gl=KR&ceid=KR:ko","스포츠":"https://news.google.com/rss/headlines/section/topic/SPORTS?hl=ko&gl=KR&ceid=KR:ko","연예":"https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=ko&gl=KR&ceid=KR:ko","세계":"https://news.google.com/rss/headlines/section/topic/WORLD?hl=ko&gl=KR&ceid=KR:ko"};
+async function gfetch(url,cat){try{const ctrl=new AbortController();const t=setTimeout(()=>ctrl.abort(),12000);const r=await fetch(url,{signal:ctrl.signal,headers:{"User-Agent":"Mozilla/5.0 (newsbot)"}});clearTimeout(t);const xml=await r.text();const items=xml.split(/<item[ >]/i).slice(1);return items.map((b,idx)=>{let ti=strip(tag(b,"title"));let src="";const k=ti.lastIndexOf(" - ");if(k>12){src=ti.slice(k+3);ti=ti.slice(0,k);}let link=tag(b,"link");if(!link){const m=b.match(/<link[^>]*>([\s\S]*?)<\/link>/i);link=m?m[1].trim():"";}return {title:ti,link,src:src||"Google뉴스",pubDate:tag(b,"pubDate"),cat,rank:idx};}).filter(x=>x.title&&x.link).slice(0,12);}catch(e){console.error("gfail",cat,e.message);return [];}}
+const all=[];const seen=new Set();
+for(const f of FEEDS){const arr=await one(f);let n=0;for(const it of arr){if(it.link&&!seen.has(it.link)){seen.add(it.link);all.push(it);n++;}}console.log(f.cat,f.s,"+",n);}
+const byCat={};for(const it of all){(byCat[it.cat]=byCat[it.cat]||[]).push(it);}
+let items=[];for(const c in byCat){byCat[c].sort((a,b)=>(new Date(b.pubDate)-new Date(a.pubDate))||0);items=items.concat(byCat[c].slice(0,22));}
+items.sort((a,b)=>(new Date(b.pubDate)-new Date(a.pubDate))||0);
+console.log("enriching",items.length,"articles...");
+for(let i=0;i<items.length;i+=12){const batch=items.slice(i,i+12);await Promise.all(batch.map(async it=>{const ft=await fullText(it.link);if(ft&&ft.length>(it.desc||"").length)it.desc=ft;}));}
+items.forEach(it=>{it.desc=clip(it.desc,460)});
+let hot=[];for(const c in GN){const a=await gfetch(GN[c],c);console.log("G",c,a.length);hot=hot.concat(a);}
+const out={updated:new Date().toISOString(),count:items.length,items:items,hot:hot};
+import("fs").then(fs=>fs.writeFileSync("news.json",JSON.stringify(out)));
+console.log("TOTAL news.json:",items.length);
